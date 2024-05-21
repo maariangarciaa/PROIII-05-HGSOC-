@@ -1,4 +1,4 @@
-# PROIII-05-HGSOC Research Repository
+# PROIII-05-HGSOC Research Repository 🔬
 
 Welcome to the PROIII-05-HGSOC repository, a dedicated space for our research into High-Grade Serous Ovarian Cancer (HGSOC). HGSOC stands as a challenge in oncology, characterized by its aggressive nature and often grim prognosis. Our research is focused on underlying molecular intricacies of this disease and its subtypes, aiming to decipher the nuanced mechanisms that propel ovarian cancer progression.
 
@@ -11,7 +11,7 @@ Ensure you have the necessary R packages installed to follow the analyses in thi
 install.packages(c("FactoMineR", "factoextra", "glmnet", "survival", "caret", "mixOmics", "blockForest", "dplyr","priorityLasso", "pROC", "ggplot2", "DescTools","randomForest", "stats", "pls"))
 ```
 
-## Understanding HGSOC
+## Understanding HGSOC 🔍 
 
 High-Grade Serous Ovarian Cancer (HGSOC) represents a complex oncological entity with multiple subtypes each contributing differently to patient outcomes. Through comprehensive analysis of multi-omic data, we explore the distinct etiological factors and the omic variables that define each subtype.
 
@@ -37,10 +37,12 @@ In this repository, you'll find a range of innovative computational methods appl
 - **Random Forest:** An ensemble learning method for classification and regression that improves predictive accuracy and overfitting control.
 - **Priority Lasso:** An advanced variant of the Lasso technique that prioritizes variables based on their potential relevance, optimizing feature selection.
 
-## Objective
+We have implemented both original and binary models of these methodologies to enhance the interpretability of results, especially concerning the 'Differentiated' and 'Proliferative' subtypes.
+
+## Objective  🎯 
 
 Our objective is to enhance diagnostic precision, understand subtype distinctions, and improve clinical management of HGSOC by providing accurate, interpretable results of genes influencing HGSOC subtypes.
 
-Stay tuned for updates, data releases, and collaborative opportunities!
+Stay tuned for updates, data releases, and collaborative opportunities! 🌟
 
 
