@@ -1,0 +1,565 @@
+---
+title: "PriorityLasso"
+author: "Tingting"
+date: "2024-05-21"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Priority Lasso
+
+```{r}
+# Load the necessary libraries
+library(prioritylasso)
+library(caret)
+library(pROC)
+library(ggplot2)
+library(DescTools)
+library(dplyr)
+```
+
+```{r}
+# Load the dataset
+load('TCGAforMORE.RData')
+
+# Modify row names for Transcription Factors (TF)
+tf_row_names <- rownames(omicas$TF)
+new_tf_row_names <- paste0(tf_row_names, '-TF')
+rownames(omicas$TF) <- new_tf_row_names
+
+# Modify row names for CNV
+cnv_row_names <- rownames(omicas$CNV)
+new_cnv_row_names <- paste0(cnv_row_names, "-CNV")
+rownames(omicas$CNV) <- new_cnv_row_names
+
+# Modify row names for Methylation
+methyl_row_names <- rownames(omicas$Methyl)
+new_methyl_row_names <- paste0(methyl_row_names, "-Methyl")
+rownames(omicas$Methyl) <- new_methyl_row_names
+
+# Modify row names for miRNA
+mirna_row_names <- rownames(omicas$miRNA)
+new_mirna_row_names <- paste0(mirna_row_names, "-miRNA")
+rownames(omicas$miRNA) <- new_mirna_row_names
+
+# Assuming you have already loaded your data with the initial load() and transformed the matrices
+omicas_cnv = data.frame(omicas$CNV)
+omicas_methyl = data.frame(omicas$Methyl)
+omicas_miRNA = data.frame(omicas$miRNA)
+omicas_tf = data.frame(omicas$TF)
+
+# Transpose matrices so that subjects are rows and variables are columns
+omicas_cnv_trans = t(omicas_cnv)
+omicas_methyl_trans = t(omicas_methyl)
+omicas_miRNA_trans = t(omicas_miRNA)
+omicas_tf_trans = t(omicas_tf)
+
+# Combine omics data into a single DataFrame
+omicas_all <- data.frame(cbind(omicas_cnv_trans, omicas_methyl_trans, omicas_miRNA_trans, omicas_tf_trans))
+
+# Ensure that the subtype variable is factored
+subtypes$subtype <- factor(subtypes$subtype)
+Y <- subtypes$subtype
+
+```
+
+#### Definition of blocks
+
+```{r}
+num_cnv = ncol(omicas_cnv_trans)
+num_methyl = ncol(omicas_methyl_trans)
+num_miRNA = ncol(omicas_miRNA_trans)
+num_tf = ncol(omicas_tf_trans)
+
+blocks <- list(
+    bp1 = 1:num_cnv,                                 # Block for CNV
+    bp2 = (num_cnv + 1):(num_cnv + num_methyl),      # Block for Methylation
+    bp3 = (num_cnv + num_methyl + 1):(num_cnv + num_methyl + num_miRNA), # Block for miRNA
+    bp4 = (num_cnv + num_methyl + num_miRNA + 1):(num_cnv + num_methyl + num_miRNA + num_tf) # Block for TF
+)
+
+blocks2 <- list(
+    bp1 = 1:num_tf,                                             # Block for TF
+    bp2 = (num_tf + 1):(num_tf + num_cnv),                      # Block for CNV
+    bp3 = (num_tf + num_cnv + 1):(num_tf + num_cnv + num_methyl), # Block for Methylation
+    bp4 = (num_tf + num_cnv + num_methyl + 1):(num_tf + num_cnv + num_methyl + num_miRNA) # Block for miRNA
+)
+
+```
+
+### ONE VS ALL
+
+-   **BLOCK1**
+
+```{r}
+# Create indices for data partitioning
+set.seed(123)  # Set seed for reproducibility
+trainIndex <- createDataPartition(Y, p = 0.8, list = FALSE, times = 1)
+
+# Subset data for training and testing
+trainData <- omicas_all[trainIndex, ]
+testData <- omicas_all[-trainIndex, ]
+
+trainY <- Y[trainIndex]
+testY <- Y[-trainIndex]
+classes <- unique(Y)
+models <- list()
+
+for (class in classes) {
+    binary_trainY <- ifelse(trainY == class, 1, 0)
+    
+    if (ncol(trainData[, blocks$bp1]) < length(binary_trainY)) {
+        block1_penalization <- FALSE
+    } else {
+        block1_penalization <- TRUE
+    }
+    
+    model <- prioritylasso(
+        X = as.matrix(trainData),
+        Y = binary_trainY,
+        blocks = blocks,
+        family = "binomial",
+        type.measure = "auc",
+        lambda.type = "lambda.min",  
+        block1.penalization = block1_penalization,  
+        standardize = TRUE,
+        nfolds = 10
+    )
+    
+    models[[as.character(class)]] <- model
+}
+
+
+
+```
+
+```{r}
+# Function to calculate the F1-score for a range of thresholds
+calculate_best_threshold <- function(predictions, actuals) {
+    thresholds <- seq(0.1, 0.9, by = 0.05)
+    best_threshold <- NULL
+    best_f1_score <- 0
+
+    for (threshold in thresholds) {
+        predicted <- ifelse(predictions > threshold, 1, 0)
+        cm <- confusionMatrix(as.factor(predicted), as.factor(actuals), positive = "1")
+        f1_score <- cm$byClass['F1']
+        
+        if (!is.na(f1_score) && f1_score > best_f1_score) {
+            best_f1_score <- f1_score
+            best_threshold <- threshold
+        }
+    }
+
+    return(list("threshold" = best_threshold, "F1" = best_f1_score))
+}
+
+# Apply the function for each class
+best_thresholds <- list()
+predictions <- list()
+for (class in names(models)) {
+    predictions[[class]] <- predict(models[[class]], newdata = testData, type = "response")
+    actuals <- ifelse(testY == class, 1, 0)
+    best_thresholds[[class]] <- calculate_best_threshold(predictions[[class]], actuals)
+}
+
+# Print the best thresholds and F1-scores
+print(best_thresholds)
+
+```
+
+```{r}
+predictions <- list()
+for (class in names(models)) {
+    # Predict using the model for each class
+    predictions[[class]] <- predict(models[[class]], newdata = testData, type = "response")
+}
+
+# Define specific thresholds for each class
+thresholds <- list("differentiated" = 0.6, "immunoreactive" = 0.5, "mesenchymal" = 0.8, "proliferative" = 0.15)
+
+# Apply specific thresholds to predict classes
+predicted_classes <- list()
+for (class in names(predictions)) {
+    predicted_classes[[class]] <- ifelse(predictions[[class]] > thresholds[[class]], 1, 0)
+}
+
+# Calculate confusion matrices and F1-scores
+conf_matrices <- list()
+f1_scores <- list()
+
+for (class in names(predicted_classes)) {
+    # True values of Y for the current class
+    actual <- ifelse(testY == class, 1, 0)
+
+    # Calculate the confusion matrix
+    cm <- confusionMatrix(as.factor(predicted_classes[[class]]), as.factor(actual), positive = "1")
+
+    conf_matrices[[class]] <- cm
+
+    # Extract the F1-Score
+    f1_scores[[class]] <- cm$byClass['F1']
+}
+
+# Print confusion matrices and F1-Scores
+print(conf_matrices)
+print(f1_scores)
+
+```
+
+```{r}
+evaluate_model <- function(model, testData, testY, class) {
+    # Create a binary response for the target class of the model
+    binary_testY <- ifelse(testY == class, 1, 0)
+
+    # Make probabilistic predictions
+    probabilities <- predict(model, newdata = testData, type = "response")
+    
+    # Ensure to correctly extract the probability for the target class
+    if (is.matrix(probabilities) && ncol(probabilities) > 1) {
+        # Ensure the column name matches the class name, or use an index
+        prob_for_class = probabilities[, which(colnames(probabilities) == class)]
+    } else {
+        prob_for_class = probabilities  # If there is only one output, assume it is the correct one
+    }
+
+    # Convert matrices to vectors if necessary
+    if (is.matrix(prob_for_class)) {
+        prob_for_class <- prob_for_class[, 1]
+    }
+
+    # Calculate AUC
+    roc_result = roc(response = binary_testY, predictor = prob_for_class)
+    auc_value = auc(roc_result)
+
+    return(list(roc_result = roc_result, auc_value = auc_value))
+}
+
+# Apply the evaluation function for each model
+class_levels = levels(testY)
+results <- lapply(class_levels, function(class) evaluate_model(models[[class]], testData, testY, class))
+
+
+
+```
+
+```{r}
+# Extract AUC values and ensure names are assigned
+auc_values <- sapply(results, function(x) x$auc_value)
+names(auc_values) <- class_levels  # Ensure each AUC value has an associated class name
+
+# Create the data frame
+auc_data <- data.frame(Class = names(auc_values), AUC = as.numeric(auc_values))
+
+# Plot AUCs
+ggplot(auc_data, aes(x = Class, y = AUC, fill = Class)) +
+  geom_bar(stat = "identity") +
+  labs(title = "AUC Values by Class", x = "Class", y = "AUC Value") +
+  theme_minimal()
+
+```
+
+```{r}
+
+brier_scores <- list()
+
+for (class in unique(testY)) {
+    actual_binary <- ifelse(testY == class, 1, 0)
+    pred_probs <- predicted_probs[[class]]
+    
+    # Brier Score using DescTools
+    brier_scores[[class]] <- DescTools::BrierScore(pred_probs, actual_binary)
+}
+
+# Print Brier Score Results
+print("Brier Score Results:")
+print(brier_scores)
+
+
+```
+
+```{r}
+important_vars <- list()
+
+for (class in names(models)) {
+    model <- models[[class]]
+    
+    # Extract the model coefficients
+    coef_list <- coef(model)$coefficients  # Modify '$coefficients' based on what str() reveals
+
+    # Use apply if coef_list is a matrix and not a vector
+    if (is.matrix(coef_list)) {
+        non_zero_coefs <- apply(coef_list, 1, function(x) any(x != 0))
+        important_vars[[class]] <- names(which(non_zero_coefs))
+    } else {
+        # If it is directly a vector
+        important_vars[[class]] <- names(which(coef_list != 0))
+    }
+}
+
+# Print the important variables for each class
+print(important_vars)
+
+```
+
+```{r}
+
+coef_data <- data.frame()
+
+for (class in names(models)) {
+    model <- models[[class]]
+    coef_list <- coef(model)$coefficients
+    
+    # Create a dataframe of the coefficients
+    coef_df <- data.frame(
+      Variable = names(coef_list),
+      Coefficient = coef_list,
+      Class = class
+    )
+    
+    # Filter out coefficients that are exactly zero if necessary
+    coef_df <- coef_df[coef_df$Coefficient != 0, ]
+
+    # Select the top 10 positive and negative coefficients
+    top_positive <- coef_df %>% filter(Coefficient > 0) %>% top_n(10, Coefficient)
+    top_negative <- coef_df %>% filter(Coefficient < 0) %>% top_n(-10, Coefficient)
+    
+    # Combine the selected coefficients
+    coef_df <- rbind(top_positive, top_negative)
+    
+    # Add to the main dataframe
+    coef_data <- rbind(coef_data, coef_df)
+}
+
+#Create the combined bar plot with facets
+p <- ggplot(coef_data, aes(x = reorder(Variable, Coefficient), y = Coefficient, fill = Coefficient > 0)) +
+    geom_col(show.legend = FALSE) +
+    coord_flip() +  #Flip axes for better visualization
+    labs(title = "Model Coefficients for Different Classes",
+         x = "Variables",
+         y = "Coefficients") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5),
+          axis.text.y = element_text(size = 7)) +  # Ajustar el tamaño del texto
+    facet_wrap(~ Class, scales = "free_y")  # Crear subgráficos por clase
+
+print(p)
+```
+
+-   Block2
+
+    ```{r}
+
+    models2 <- list()
+    for (class in classes) {
+        binary_trainY <- ifelse(trainY == class, 1, 0)
+        
+        if (ncol(trainData[, blocks$bp1]) < length(binary_trainY)) {
+            block1_penalization <- FALSE
+        } else {
+            block1_penalization <- TRUE
+        }
+        
+        model <- prioritylasso(
+            X = as.matrix(trainData),
+            Y = binary_trainY,
+            blocks = blocks2,
+            family = "binomial",
+            type.measure = "auc",
+            lambda.type = "lambda.min",  
+            block1.penalization = block1_penalization,  
+            standardize = TRUE,
+            nfolds = 10
+        )
+        models2[[as.character(class)]] <- model
+    }
+
+    predictions <- list()
+    for (class in names(models2)) {
+        # Predict using the model for each class
+        predictions[[class]] <- predict(models2[[class]], newdata = testData, type = "response")
+    }
+
+    # Define specific thresholds for each class
+    thresholds <- list("differentiated" = 0.6, "immunoreactive" = 0.5, "mesenchymal" = 0.8, "proliferative" = 0.15)
+
+    # Apply specific thresholds to predict classes
+    predicted_classes <- list()
+    for (class in names(predictions)) {
+        predicted_classes[[class]] <- ifelse(predictions[[class]] > thresholds[[class]], 1, 0)
+    }
+
+    # Calculate confusion matrices and F1-scores
+    conf_matrices <- list()
+    f1_scores <- list()
+
+    for (class in names(predicted_classes)) {
+        # True values of Y for the current class
+        actual <- ifelse(testY == class, 1, 0)
+
+        # Calculate the confusion matrix
+        cm <- confusionMatrix(as.factor(predicted_classes[[class]]), as.factor(actual), positive = "1")
+
+        conf_matrices[[class]] <- cm
+
+        # Extract the F1-Score
+        f1_scores[[class]] <- cm$byClass['F1']
+    }
+
+    # Print confusion matrices and F1-Scores
+    print(conf_matrices)
+    print(f1_scores)
+
+    ```
+
+```{r}
+important_vars_2 <- list()
+
+for (class in names(models2)) {
+    model <- models2[[class]]
+    
+    # Extract the model coefficients
+    coef_list <- coef(model)$coefficients  # Modify '$coefficients' based on what str() reveals
+
+    # Use apply if coef_list is a matrix and not a vector
+    if (is.matrix(coef_list)) {
+        non_zero_coefs <- apply(coef_list, 1, function(x) any(x != 0))
+        important_vars_2[[class]] <- names(which(non_zero_coefs))
+    } else {
+        # If it is directly a vector
+        important_vars_2[[class]] <- names(which(coef_list != 0))
+    }
+}
+
+# Print the important variables for each class
+print(important_vars_2)
+```
+
+### ONE VS ONE ( DIFFERENTIATED VS PROLIFERATIVE)
+
+```{r}
+# Filter the data to include only 'differentiated' and 'proliferative'
+trainData_1v1 <- trainData[trainY %in% c("differentiated", "proliferative"), ]
+testData_1v1 <- testData[testY %in% c("differentiated", "proliferative"), ]
+
+# Update the response variable
+trainY_1v1 <- trainY[trainY %in% c("differentiated", "proliferative")]
+testY_1v1 <- testY[testY %in% c("differentiated", "proliferative")]
+
+set.seed(123)
+# Convert the response to binary, e.g., 'differentiated' as 1, 'proliferative' as 0
+binary_trainY_1v1 <- ifelse(trainY_1v1 == "differentiated", 1, 0)
+binary_testY_1v1 <- ifelse(testY_1v1 == "differentiated", 1, 0)
+model_1v1 <- prioritylasso(
+    X = as.matrix(trainData_1v1),
+    Y = binary_trainY_1v1,
+    blocks = blocks2,
+    family = "binomial",
+    type.measure = "auc",
+    lambda.type = "lambda.min",
+    block1.penalization = TRUE,  # Ajustar basado en la disponibilidad de predictores
+    standardize = TRUE,
+    nfolds = 10
+)
+```
+
+```{r}
+# Predict probabilities on the test set
+pred_probs_1v1 <- predict(model_1v1, newdata = testData_1v1, type = "response")
+
+# Calculate the confusion matrix and other relevant metrics
+cm_1v1 <- confusionMatrix(as.factor(ifelse(pred_probs_1v1 > 0.5, 1, 0)), as.factor(binary_testY_1v1), positive = "1")
+print(cm_1v1)
+
+# Calculate and display the AUC
+roc_obj_1v1 <- pROC::roc(binary_testY_1v1, pred_probs_1v1)
+auc_1v1 <- pROC::auc(roc_obj_1v1)
+print(paste("AUC for Differentiated vs Proliferative:", auc_1v1))
+
+# Calculate and display the Brier score
+brier_score_1v1 <- BrierScore(pred_probs_1v1_blocks2, binary_testY_1v1)
+print(paste("Brier Score for Differentiated vs Proliferative:", brier_score_1v1))
+
+```
+
+```{r}
+# Extract important variables
+coef_list <- coef(model_1v1)  # Extract coefficients from the model
+
+# Initialize list to store important variables
+
+important_vars_differentiated <- c()
+important_vars_proliferative <- c()
+# Iterate over each block to get non-zero coefficients
+for (block in names(coef_list)) {
+    coefs <- coef_list[[block]]
+    non_zero_coefs <- coefs[coefs != 0]
+    
+    # If there are non-zero coefficients, add them to the appropriate list based on their sign
+    if (length(non_zero_coefs) > 0) {
+        positive_vars <- names(non_zero_coefs[non_zero_coefs > 0])
+        negative_vars <- names(non_zero_coefs[non_zero_coefs < 0])
+        
+        important_vars_differentiated <- c(important_vars_differentiated, positive_vars)
+        important_vars_proliferative <- c(important_vars_proliferative, negative_vars)
+    }
+}
+
+# Print the important variables for each class
+print("Important variables for differentiated:")
+print(important_vars_differentiated)
+
+print("Important variables for proliferative:")
+print(important_vars_proliferative)
+
+
+```
+
+```{r}
+# Extract important variables with coefficients
+coef_list <- coef(model_1v1, s = "lambda.min")
+
+# Prepare the ggplot object
+plot_important_vars <- ggplot() +
+    labs(title = "Coefficients of Differentiated vs Proliferative",
+         x = "Variables",
+         y = "Coeffcientes") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5),
+          axis.text.y = element_text(size = 8))
+
+# Iterate over each block to get coefficients
+for (block in names(coef_list)) {
+    coefs <- coef_list[[block]]
+    non_zero_coefs <- coefs[coefs != 0]
+    
+    # If there are non-zero coefficients, add them to the plot
+    if (length(non_zero_coefs) > 0) {
+        # Prepare the block data
+        variable_names <- names(non_zero_coefs)
+        coefficients <- as.numeric(non_zero_coefs)
+        
+        if (length(variable_names) > 0 && length(coefficients) > 0) {
+            # Create a data frame for ggplot
+            block_data <- data.frame(
+                Variable = variable_names,
+                Coefficient = coefficients,
+                stringsAsFactors = FALSE
+            )
+            
+            # Add the block data to the plot
+            plot_important_vars <- plot_important_vars +
+                geom_col(data = block_data, aes(x = reorder(Variable, Coefficient), y = Coefficient, fill = Coefficient > 0), show.legend = FALSE) +
+                coord_flip()  # Flip coordinates for better readability
+        }
+    }
+}
+
+# Print the plot
+print(plot_important_vars)
+
+
+```
