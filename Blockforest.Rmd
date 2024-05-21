@@ -1,0 +1,277 @@
+---
+title: "prueba"
+author: "Lorena"
+date: "2024-05-13"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+```
+
+## BLOCKFOREST MODEL WITH ALL THE DATASET
+
+```{r}
+library(blockForest)
+library(caret)
+library(dplyr)
+
+# Load omics data
+load("C:/Users/Usuario/Desktop/CIENCIA DE DATOS/TERCERO/SEGUNDO CUATRI/PROYIII/TCGAforMORE.RData")
+load("C:/Users/Usuario/Desktop/CIENCIA DE DATOS/TERCERO/SEGUNDO CUATRI/PROYIII/folds.RData")
+
+nombres_filas_TF <- rownames(omicas$TF)
+nuevos_nombres_filas <- paste0(nombres_filas_TF, 'TF')
+rownames(omicas$TF) <- nuevos_nombres_filas
+
+# Define data matrices for each block
+omicas_cnv <- omicas$CNV
+omicas_methyl <- omicas$Methyl
+omicas_miRNA <- omicas$miRNA
+omicas_tf <- omicas$TF
+
+# Remove useless variables
+rm(assoc, clinical, GeneExpr, nuevos_nombres_filas, nombres_filas_TF)
+
+# Create a list of blocks
+blocks <- list("A" = 1:ncol(omicas_cnv), 
+               "B" = (ncol(omicas_cnv) + 1):(ncol(omicas_cnv) + ncol(omicas_methyl)),
+               "C" = (ncol(omicas_cnv) + ncol(omicas_methyl) + 1):(ncol(omicas_cnv) + ncol(omicas_methyl) + ncol(omicas_miRNA)),
+               "D" = (ncol(omicas_cnv) + ncol(omicas_methyl) + ncol(omicas_miRNA) + 1):ncol(omicas_tf))
+
+# Combine all omics into a single matrix
+omicas_all <- rbind(omicas_cnv, omicas_methyl, omicas_miRNA, omicas_tf)
+
+# Define X and Y for data splitting
+X <- t(omicas_all)
+subtypes$subtype <- factor(subtypes$subtype)
+Y <- subtypes$subtype
+
+# Split the dataset into training and testing sets
+set.seed(123)  # For reproducibility
+indices <- createDataPartition(Y, p = 0.8, list = FALSE)
+x_train <- X[indices, ]
+x_test <- X[-indices, ]
+y_train <- Y[indices]
+y_test <- Y[-indices]
+```
+
+Hyperparameters
+-> mtry -> a vector of length equal to the number of blocks, where the m-th entry of the vector
+gives the number of variables to sample from block m. The default values are sqrt(p_1) +
+sqrt(p_2) + ... sqrt(p_M) where p_m denotes the number of variables in the m-th block (m = 1, ..., M) and sqrt() denoted the square root function -> let the function calculate it
+
+-> splitrule, block.method, replace -> default
+
+-> try values for two hyperparameters: nsets and num.trees:
+-> num.trees = c(100, 200)
+-> nsets = c(100, 200)
+
+```{r}
+# Define the evaluation function for cross-validation
+cv_func <- function(num.trees, nsets, folds, x_train, y_train, blocks) {
+  cv_results <- lapply(folds, function(fold_index) {
+    x_train_fold <- x_train[fold_index[[1]], ]
+    y_train_fold <- y_train
+    
+    # Fit the blockForest model with the current fold
+    result <- blockfor(X = t(x_train_fold), y = y_train_fold, blocks = blocks, 
+                       num.trees = num.trees, replace = TRUE,
+                       nsets = nsets, num.trees.pre = 50, splitrule = "gini", 
+                       block.method = "BlockForest", importance='impurity')
+  
+    return(result)
+  })
+  
+  return(cv_results)
+}
+
+# Define the ranges of values for the hyperparameters
+param_grid <- expand.grid(
+  num.trees = c(100, 200),
+  nsets = c(10, 20)
+)
+
+# Apply cv_func for each combination of hyperparameters in param_grid
+results <- mapply(function(num_trees, nsets) {
+  cv_func(num.trees = num_trees, 
+          nsets = nsets, 
+          folds = folds, 
+          x_train = x_train, 
+          y_train = y_train, 
+          blocks = blocks)
+}, param_grid$num.trees, param_grid$nsets)
+```
+
+```{r}
+# Define a function to get the lowest prediction error from the results
+get_min_prediction_error <- function(results) {
+  min_errors <- sapply(results, function(result) {
+    min(result$forest$prediction.error)
+  })
+  return(min(min_errors))
+}
+
+# Filter the results to remove those with non-finite prediction errors
+filtered_results <- results[sapply(results, function(result) all(is.finite(result$forest$prediction.error)))]
+
+# Get the lowest prediction error from all filtered results
+min_error <- get_min_prediction_error(filtered_results)
+
+# Find the combination of hyperparameters with the lowest prediction error
+best_combination_index <- which.min(sapply(filtered_results, function(result) min(results$forest$prediction.error)))
+best_combination <- param_grid[best_combination_index, ]
+
+print(paste("The combination of hyperparameters with the lowest prediction error is:", 
+            paste(names(best_combination), best_combination, sep = "=", collapse = ", "), 
+            "with a prediction error of", min_error))
+```
+
+## Apply model with the best hyperparameters found
+
+```{r}
+# Apply the blockfor model with the best parameter combination on the test set
+best_model <- blockfor(X = x_train, y = y_train, blocks = blocks, 
+                       num.trees = 100, replace = TRUE,
+                       nsets = 10, num.trees.pre = 50, splitrule = "gini", 
+                       block.method = "BlockForest", importance='impurity')
+
+# Convert the x_test matrix to a dataframe
+x_test_df <- data.frame(x_test)
+
+predictions <- predict(object = best_model$forest,
+                       data = x_test_df, 
+                       predict.all = FALSE, 
+                       num.trees = 100, 
+                       type = 'response', 
+                       num.threads = 1, 
+                       verbose = TRUE)
+```
+
+```{r}
+# Genera la matriz de confusión
+conf_matrix <- confusionMatrix(predictions$predictions, y_test)
+
+# Imprime la matriz de confusión
+print(conf_matrix)
+```
+
+## 10 variables mas importantes
+```{r}
+# Get the importance of the variables
+importancia_variables <- best_model$forest$variable.importance
+
+# Sort the variables by importance from highest to lowest
+importancia_ordenada <- importancia_variables[order(importancia_variables, decreasing = TRUE)]
+
+# Filter variables with positive importance
+importancia_positiva <- importancia_ordenada[importancia_ordenada > 0]
+
+# Filter variables with negative importance
+importancia_negativa <- importancia_ordenada[importancia_ordenada < 0]
+
+# Select the top 10 most important variables
+top_10_importancia <- importancia_ordenada[1:11]
+
+## Check the column names in x_train
+colnames_x_train <- colnames(x_train)
+
+# Get the names of the top 10 most important variables
+top_10_nombres <- names(top_10_importancia)
+
+# Check if the variable names are in x_train
+top_10_nombres <- top_10_nombres[top_10_nombres %in% colnames_x_train]
+
+top_10_nombres
+
+# Create a bar plot of the top 10 most important variables with names
+barplot(top_10_importancia[top_10_nombres], main = "Top 10 Important Variables",
+        xlab = "Importance", ylab = "Variables", names.arg = top_10_nombres, las = 2)
+```
+
+
+## Top 10 least important variables 
+
+```{r}
+# Sort the variables by importance from lowest to highest
+importancia_ordenada <- importancia_variables[order(importancia_variables)]
+
+# Select the bottom 10 least important variables
+bottom_10_importancia <- importancia_ordenada[1:11]
+
+# Get the names of the bottom 10 least important variables
+bottom_10_nombres <- names(bottom_10_importancia)
+
+# Check if the variable names are in x_train
+bottom_10_nombres <- bottom_10_nombres[bottom_10_nombres %in% colnames_x_train]
+
+# Create a bar plot of the bottom 10 least important variables
+barplot(bottom_10_importancia, main = "Bottom 10 Important Variables",
+        xlab = "Variables", ylab = "Importance")
+```
+
+
+## Find which block each important variable belongs to
+
+```{r}
+library(dplyr)
+# Get the names of the variables for each block
+names_cnv <- colnames(t(omicas_cnv))
+names_methyl <- colnames(t(omicas_methyl))
+names_miRNA <- colnames(t(omicas_miRNA))
+names_tf <- colnames(t(omicas_tf))
+
+# Create a list with the variable names and their corresponding block
+block_names <- list(
+  CNV = names_cnv,
+  Methylation = names_methyl,
+  miRNA = names_miRNA,
+  TF = names_tf
+)
+
+# Function to find the block to which a variable belongs
+find_block <- function(variable, block_names) {
+  for (block in names(block_names)) {
+    if (variable %in% block_names[[block]]) {
+      return(block)
+    }
+  }
+  return(NA)  # Returns NA if not found in any block
+}
+
+# Important variables
+important_vars <- c("MIR34A", "PRAMEF3", "RERE", "SPATA21", "HES3", "HNRNPCL1", "CLCNKA", "C1orf195", "SNORA59A", "FAM131C", "ALDH4A1", "PLEKHM2" ,  "PAX7" ,     "B3GALT6" ,  "TNFRSF25" , "CASZ1",     "LINC00115", "ARHGEF10L")
+
+# Create a dataframe to store the important variables and their corresponding blocks
+important_vars_blocks <- data.frame(
+  Variable = important_vars,
+  Block = sapply(important_vars, find_block, block_names = block_names)
+)
+
+print(important_vars_blocks)
+```
+
+## ANOVA
+
+```{r}
+# Create a table of the most important variables and their values in the training dataset
+top_variables_data <- as.data.frame(x_train[, top_10_nombres])
+top_variables_data$subtype <- y_train
+
+# Analyze the association between variables and cancer subtypes using ANOVA
+anova_results <- list()
+
+for (variable in top_10_nombres) {
+  formula <- as.formula(paste(variable, "~ subtype"))
+  anova_results[[variable]] <- summary(aov(formula, data = top_variables_data))
+}
+
+# Display ANOVA results
+anova_summary <- sapply(anova_results, function(x) x[[1]][["Pr(>F)"]][1])
+anova_summary <- data.frame(Variable = names(anova_summary), PValue = anova_summary)
+anova_summary <- anova_summary %>% arrange(PValue)
+
+print("ANOVA results for the most important variables:")
+print(anova_summary)
+```
+
