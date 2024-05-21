@@ -8,7 +8,7 @@ Ensure you have the necessary R packages installed to follow the analyses in thi
 
 ```R
 # Install necessary R packages
-install.packages(c("FactoMineR", "factoextra", "glmnet", "survival", "caret", "mixOmics", "blockForest", "dplyr"))
+install.packages(c("FactoMineR", "factoextra", "glmnet", "survival", "caret", "mixOmics", "blockForest", "dplyr","priorityLasso", "pROC", "ggplot2", "DescTools","randomForest", "stats", "pls"))
 ```
 
 ## Understanding HGSOC
