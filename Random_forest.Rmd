@@ -1,0 +1,86 @@
+---
+title: "Random Forest"
+author: "Marc Vicedo Carboneres"
+date: "23/2/2024"
+output: pdf_document
+---
+
+```{r}
+load('TCGAforMORE.RData')
+omicas$CNV
+omicas$Methyl
+omicas$TF
+```
+```{r añadir TF}
+nombres_filas_TF <- rownames(omicas$TF)
+nuevos_nombres_filas <- paste0(nombres_filas_TF, '-TF')
+rownames(omicas$TF) <- nuevos_nombres_filas
+omicas$TF
+```
+
+```{r}
+library(randomForest)
+library(caret)
+
+
+
+# Dividir los datos en características (variables independientes) y etiquetas (variable objetivo)
+X <- cbind(t(omicas$CNV), t(omicas$Methyl), t(omicas$miRNA), t(omicas$TF))  # características
+y <- as.factor(subtypes$subtype)  # variable objetivo
+
+# Dividir los datos en conjuntos de entrenamiento y prueba
+set.seed(42) 
+indices <- createDataPartition(y, p = 0.8, list = FALSE)
+X_train <- X[indices, ]
+X_test <- X[-indices, ]
+y_train <- y[indices]
+y_test <- y[-indices]
+
+
+rf_model <- randomForest(x = X_train, y = y_train, ntree = 100, importance = TRUE, type = "classification")
+
+# Hacer predicciones en el conjunto de prueba
+predicciones <- predict(rf_model, newdata = X_test)
+
+# Evaluar el rendimiento del modelo
+print("Exactitud del modelo:")
+print(mean(predicciones == y_test))
+print("\nReporte de clasificación:")
+print(confusionMatrix(data = predicciones, reference = y_test))
+
+# Analizar la importancia de las características
+importancias_caracteristicas <- importance(rf_model)
+print("\nImportancia de las características:")
+print(importancias_caracteristicas)
+
+```
+
+
+
+
+```{r}
+datos_matriz = as.data.frame(importancias_caracteristicas)
+
+# Calcular los 15 valores más altos para cada columna (excluyendo MeanDecreaseAccuracy y MeanDecreaseGini)
+top_valores <- apply(datos_matriz, 2, function(x) {
+  nombres_caracteristicas <- rownames(datos_matriz)
+  top_indices <- order(x, decreasing = TRUE)[1:200]
+  top_caracteristicas <- nombres_caracteristicas[top_indices]
+  return(top_caracteristicas)
+})
+```
+
+```{r}
+mat_subset <- top_valores[, 1:4]
+important_vars_rf <- list(
+  differentiated = mat_subset[[1,]],
+  immunoreactive = mat_subset[[2,]],
+  mesenchymal = mat_subset[[3,]],
+  proliferative = mat_subset[[4,]]
+)
+important_vars_rf
+```
+
+
+
+
