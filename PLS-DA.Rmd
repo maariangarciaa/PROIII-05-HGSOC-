@@ -1,0 +1,494 @@
+---
+title: "PLS-DA"
+author: "Nuria Pastor"
+date: "2024-05-17"
+output: html_document
+---
+```{r datos}
+load('TCGAforMORE.RData')
+nombres_filas_TF <- rownames(omicas$TF)
+nuevos_nombres_filas <- paste0(nombres_filas_TF, 'TF')
+rownames(omicas$TF) <- nuevos_nombres_filas
+cnv = t(data.frame(omicas$CNV))
+methyl = t(data.frame(omicas$Methyl))
+rna = t(data.frame(omicas$miRNA))
+tf = t(data.frame(omicas$TF))
+omicas = t(rbind(omicas$CNV, omicas$miRNA, omicas$Methyl, omicas$TF))
+
+# Delete unuseful variables
+rm(assoc, clinical, GeneExpr, nuevos_nombres_filas, nombres_filas_TF)
+```
+
+
+```{r division}
+library(caret)
+
+X <- omicas
+subtypes$subtype <- factor(subtypes$subtype)
+Y <- subtypes$subtype
+
+# Split the dataset into training and test sets
+set.seed(123)
+indices <- createDataPartition(Y, p = 0.8, list = FALSE)
+x_train <- X[indices, ]
+x_test <- X[-indices, ]
+y_train <- Y[indices]
+y_test <- Y[-indices]
+
+train_control <- trainControl(method = "cv",  number = 10)
+```
+
+```{r trainingset}
+# Select the same samples from each data block for the training set
+tr_cnv <- cnv[indices, ]
+tr_methyl <- methyl[indices, ]
+tr_rna <- rna[indices, ]
+tr_tf <- tf[indices, ]
+
+#rm(tf,rna,methyl,cnv,omicas)
+```
+
+
+```{r plsDA}
+library(mixOmics)
+
+# Create a list containing the selected data for each block
+x_train_list <- list(cnv = tr_cnv, methyl = tr_methyl, miRNA = tr_rna, tf = tr_tf)
+```
+
+```{r numbercomponents}
+set.seed(123)
+center_by_mean <- function(data) {
+  centered_data <- scale(data, center = TRUE, scale = FALSE)
+  return(centered_data)}
+
+centered_omics <- lapply(x_train_list, center_by_mean)
+design <- matrix(c(0, 1, 0.2, 1,
+                   1, 0, 0.2, 1,
+                   0.2, 0.2, 0, 0.9,
+                   1, 1, 0.9, 0), 
+                   nrow=4, ncol=4, byrow=TRUE)
+
+rownames(design) = colnames(design) = c("cnv", "methyl", "miRNA", "tf")
+plsda_model <- block.plsda(x_train_list, y_train, ncomp = 10, design=design)
+perf_cv <- perf(plsda_model, validation = "Mfold", folds = 10)
+plot(perf_cv, legend.position = "horizontal")
+
+rm(plsda_model, perf_cv, center_by_mean, tr_tf, tr_methyl,tr_rna,tr_cnv)
+```
+
+```{r plsDAmodel}
+result.diablo <- block.plsda(centered_omics, y_train, ncomp=4, scale=FALSE, design=design)
+```
+
+
+```{r SamplePlots}
+# correlation between components from each data set has been maximised as specified in the design matrix
+#plotDiablo(result.diablo, ncomp = 1)
+#plotDiablo(result.diablo, ncomp = 2)
+#plotDiablo(result.diablo, ncomp = 3)
+#plotDiablo(result.diablo, ncomp = 4)
+
+
+# TO KNOW WHICH CLASS CONTRIBUTES IN EACH COMPONENT AND DECIDE WHICH COMPONENTS TO TAKE
+block_names <- names(result.diablo$X)
+
+# Generate a plot for each block
+for (block in block_names) {
+  plotIndiv(result.diablo, ind.names = FALSE, legend = TRUE, 
+            title = paste('DIABLO Sample Plot:', block),
+            ellipse = TRUE, comp = c(1, 2), block = block)
+}
+for (block in block_names) {
+  plotIndiv(result.diablo, ind.names = FALSE, legend = TRUE, 
+            title = paste('DIABLO Sample Plot:', block),
+            ellipse = TRUE, comp = c(3, 4), block = block)
+}
+
+```
+
+
+```{r}
+l_cnv_12 <- plotVar(result.diablo,var.names = FALSE, style = 'graphics', legend = TRUE, col = c('darkorchid'), comp = c(1, 2), blocks = 1, plot=FALSE)
+l_methyl_12 <- plotVar(result.diablo, var.names = FALSE, style = 'graphics', legend = TRUE, col = c('brown1'), comp = c(1, 2), blocks = 2, plot=FALSE)
+l_miRNA_12 <- plotVar(result.diablo, var.names = FALSE, style = 'graphics', legend = TRUE, col = c('lightgreen'), comp = c(1, 2), blocks = 3, plot=FALSE)
+l_tf_12 <- plotVar(result.diablo, var.names = FALSE, style = 'graphics', legend = TRUE, col = c('blue'), comp = c(1, 2), blocks = 4, plot=FALSE)
+
+
+l_cnv_34 <- plotVar(result.diablo,var.names = FALSE, style = 'graphics', legend = TRUE, col = c('darkorchid'), comp = c(3, 4), blocks = 1, plot=FALSE)
+l_methyl_34 <- plotVar(result.diablo, var.names = FALSE, style = 'graphics', legend = TRUE, col = c('brown1'), comp = c(3, 4), blocks = 2, plot=FALSE)
+l_miRNA_34 <- plotVar(result.diablo, var.names = FALSE, style = 'graphics', legend = TRUE, col = c('lightgreen'), comp = c(3, 4), blocks = 3, plot=FALSE)
+l_tf_34 <- plotVar(result.diablo, var.names = FALSE, style = 'graphics', legend = TRUE, col = c('blue'), comp = c(3, 4), blocks = 4, plot=FALSE)
+
+point_in_area <- function(x, y, center_x, center_y, inner_radius, outer_radius) {
+  distance_to_center <- sqrt((x - center_x)^2 + (y - center_y)^2)
+  if (distance_to_center > inner_radius && distance_to_center < outer_radius) {
+    return(TRUE)
+  } else {
+    return(FALSE)
+  }
+}
+
+count_points_in_area <- function(df, center_x, center_y, inner_radius, outer_radius) {
+  count <- 0
+  for (i in 1:nrow(df)) {
+    x <- df[i, "x"]
+    y <- df[i, "y"]
+    if (point_in_area(x, y, center_x, center_y, inner_radius, outer_radius)) {
+      count <- count + 1
+    }
+  }
+  
+  return(count)
+}
+
+center_x <- 0
+center_y <- 0
+inner_radius <- 0.5
+outer_radius <- 1
+
+
+# NUMBER OF VARIABLES FOR EACH BLOCK AND FOR EACH SET OF COMPONENTS (1-2 AND 3-4)
+n_cnv_12 <- count_points_in_area(l_cnv_12, center_x, center_y, inner_radius, outer_radius)
+n_cnv_34 <- count_points_in_area(l_cnv_34, center_x, center_y, inner_radius, outer_radius)
+n_methyl_12 <- count_points_in_area(l_methyl_12, center_x, center_y, inner_radius, outer_radius)
+n_methyl_34 <- count_points_in_area(l_methyl_34, center_x, center_y, inner_radius, outer_radius)
+n_mirna_12 <- count_points_in_area(l_miRNA_12, center_x, center_y, inner_radius, outer_radius)
+n_mirna_34 <- count_points_in_area(l_miRNA_34, center_x, center_y, inner_radius, outer_radius)
+n_tf_12 <- count_points_in_area(l_tf_12, center_x, center_y, inner_radius, outer_radius)
+n_tf_34 <- count_points_in_area(l_tf_34, center_x, center_y, inner_radius, outer_radius)
+```
+
+
+```{r}
+# SELECT THE BEST HYPERPARAMETERS
+
+tr_cnv_df <- as.data.frame(tr_cnv)
+tr_methyl_df <- as.data.frame(tr_methyl)
+tr_miRNA_df <- as.data.frame(tr_rna)
+tr_tf_df <- as.data.frame(tr_tf)
+
+
+x_train_list <- list(cnv = tr_cnv_df, methyl = tr_methyl_df, miRNA = tr_miRNA_df, tf = tr_tf_df)
+dim(tr_cnv_df)
+grid <- list(
+  cnv = c(400, 800, 1200),
+  methyl = c(800, 1300, 1700),
+  miRNA = c(50, 100, 250),
+  tf = c(70, 150, 230)
+)
+
+subtypes = factor(subtypes)
+set.seed(123) 
+tune.result <- tune.block.splsda(
+  X = x_train_list,
+  Y = y_train,
+  ncomp = 4,
+  design = design,
+  test.keepX = grid,
+  validation = 'Mfold',
+  folds = 10,
+  dist = 'max.dist'
+)
+
+best.keepX <- tune.result$choice.keepX
+print(best.keepX)
+```
+
+```{r}
+# NEW MODEL
+result.diablo.filtered <- block.splsda(X = x_train_list, Y = y_train, ncomp = 4, keepX = best.keepX, design = design)
+```
+
+```{r}
+plotIndiv(result.diablo.filtered, comp = c(1,2), ind.names = FALSE, legend=TRUE)
+
+plotIndiv(result.diablo.filtered, comp = c(3,4), ind.names = FALSE, legend=TRUE)
+```
+
+
+```{r}
+# VARIABLE PLOTS
+plotVar(result.diablo.filtered, var.names=FALSE, style = 'graphics', legend = TRUE, col = c('darkorchid', 'brown1', 'lightgreen', 'blue'), comp = c(1,2))
+plotVar(result.diablo.filtered, var.names=FALSE, style = 'graphics', legend = TRUE, col = c('darkorchid', 'brown1', 'lightgreen', 'blue'), comp = c(3,4))
+
+n <- plotVar(result.diablo.filtered, var.names=FALSE, style = 'graphics', legend = TRUE, col = c('darkorchid', 'brown1', 'lightgreen', 'blue'), comp = c(1,2))
+n
+
+p11 <- plotLoadings(result.diablo.filtered, comp = 1, contrib='max', block='cnv')
+p12 <- plotLoadings(result.diablo.filtered, comp = 1, contrib='max', block='methyl') 
+p13 <- plotLoadings(result.diablo.filtered, comp = 1, contrib='max', block='miRNA') 
+p14 <- plotLoadings(result.diablo.filtered, comp = 1, contrib='max', block='tf') 
+p1 <- rbind(p11,p12,p13,p14)
+
+p21 <- plotLoadings(result.diablo.filtered, comp = 2, contrib='max', block='cnv')
+p22 <- plotLoadings(result.diablo.filtered, comp = 2, contrib='max', block='methyl') 
+p23 <- plotLoadings(result.diablo.filtered, comp = 2, contrib='max', block='miRNA') 
+p24 <- plotLoadings(result.diablo.filtered, comp = 2, contrib='max', block='tf') 
+p2 <- rbind(p21,p22,p23,p24)
+
+p31 <- plotLoadings(result.diablo.filtered, comp = 3, contrib='max', block='cnv')
+p32 <- plotLoadings(result.diablo.filtered, comp = 3, contrib='max', block='methyl') 
+p33 <- plotLoadings(result.diablo.filtered, comp = 3, contrib='max', block='miRNA') 
+p34 <- plotLoadings(result.diablo.filtered, comp = 3, contrib='max', block='tf') 
+p3 <- rbind(p31,p32,p33,p34)
+
+p41 <- plotLoadings(result.diablo.filtered, comp = 4, contrib='max', block='cnv')
+p42 <- plotLoadings(result.diablo.filtered, comp = 4, contrib='max', block='methyl') 
+p43 <- plotLoadings(result.diablo.filtered, comp = 4, contrib='max', block='miRNA') 
+p44 <- plotLoadings(result.diablo.filtered, comp = 4, contrib='max', block='tf') 
+p4 <- rbind(p41,p42,p43,p44)
+```
+
+```{r}
+library(dplyr)
+
+# Define threshold
+threshold <- 0.5  # Adjust this value as necessary
+
+# Function to select variables that exceed the threshold
+select_top_variables <- function(component, threshold) {
+  top_variables <- component %>% filter(abs(component[[1]]) >= threshold)
+  print(paste("Numver of variables selected:", nrow(top_variables)))  # Print the number of selected variables
+  return(rownames(top_variables))
+}
+
+# Apply the selection function to each component
+differentiated_comp1 <- as.data.frame(p1['differentiated']) %>% arrange(desc(abs(differentiated)))
+differentiated_comp2 <- as.data.frame(p2['differentiated']) %>% arrange(desc(abs(differentiated)))
+differentiated_comp3 <- as.data.frame(p3['differentiated']) %>% arrange(desc(abs(differentiated)))
+differentiated_comp4 <- as.data.frame(p4['differentiated']) %>% arrange(desc(abs(differentiated)))
+
+immunoreactive_comp1 <- as.data.frame(p1['immunoreactive']) %>% arrange(desc(abs(immunoreactive)))
+immunoreactive_comp2 <- as.data.frame(p2['immunoreactive']) %>% arrange(desc(abs(immunoreactive)))
+immunoreactive_comp3 <- as.data.frame(p3['immunoreactive']) %>% arrange(desc(abs(immunoreactive)))
+immunoreactive_comp4 <- as.data.frame(p4['immunoreactive']) %>% arrange(desc(abs(immunoreactive)))
+
+mesenchymal_comp1 <- as.data.frame(p1['mesenchymal']) %>% arrange(desc(abs(mesenchymal)))
+mesenchymal_comp2 <- as.data.frame(p2['mesenchymal']) %>% arrange(desc(abs(mesenchymal)))
+mesenchymal_comp3 <- as.data.frame(p3['mesenchymal']) %>% arrange(desc(abs(mesenchymal)))
+mesenchymal_comp4 <- as.data.frame(p4['mesenchymal']) %>% arrange(desc(abs(mesenchymal)))
+
+proliferative_comp1 <- as.data.frame(p1['proliferative']) %>% arrange(desc(abs(proliferative)))
+proliferative_comp2 <- as.data.frame(p2['proliferative']) %>% arrange(desc(abs(proliferative)))
+proliferative_comp3 <- as.data.frame(p3['proliferative']) %>% arrange(desc(abs(proliferative)))
+proliferative_comp4 <- as.data.frame(p4['proliferative']) %>% arrange(desc(abs(proliferative)))
+
+# Select principal variables
+diff_comp1 <- select_top_variables(differentiated_comp1, threshold)
+diff_comp2 <- select_top_variables(differentiated_comp2, threshold)
+diff_comp3 <- select_top_variables(differentiated_comp3, threshold)
+diff_comp4 <- select_top_variables(differentiated_comp4, threshold)
+variables_differentiated <- union(diff_comp1, diff_comp2)
+variables_differentiated <- union(variables_differentiated, diff_comp3)
+variables_differentiated <- union(variables_differentiated, diff_comp4)
+
+imm_comp1 <- select_top_variables(immunoreactive_comp1, threshold)
+imm_comp2 <- select_top_variables(immunoreactive_comp2, threshold)
+imm_comp3 <- select_top_variables(immunoreactive_comp3, threshold)
+imm_comp4 <- select_top_variables(immunoreactive_comp4, threshold)
+variables_immunoreactive <- union(imm_comp1, imm_comp2)
+variables_immunoreactive <- union(variables_immunoreactive, imm_comp3)
+variables_immunoreactive <- union(variables_immunoreactive, imm_comp4)
+
+mes_comp1 <- select_top_variables(mesenchymal_comp1, threshold)
+mes_comp2 <- select_top_variables(mesenchymal_comp2, threshold)
+mes_comp3 <- select_top_variables(mesenchymal_comp3, threshold)
+mes_comp4 <- select_top_variables(mesenchymal_comp4, threshold)
+variables_mesenchymal <- union(mes_comp1, mes_comp2)
+variables_mesenchymal <- union(variables_mesenchymal, mes_comp3)
+variables_mesenchymal <- union(variables_mesenchymal, mes_comp4)
+
+pro_comp1 <- select_top_variables(proliferative_comp1, threshold)
+pro_comp2 <- select_top_variables(proliferative_comp2, threshold)
+pro_comp3 <- select_top_variables(proliferative_comp3, threshold)
+pro_comp4 <- select_top_variables(proliferative_comp4, threshold)
+variables_proliferative <- union(pro_comp1, pro_comp2)
+variables_proliferative <- union(variables_proliferative, pro_comp3)
+variables_proliferative <- union(variables_proliferative, pro_comp4)
+
+
+save(variables_differentiated, file = "variables_differentiated.RData")
+save(variables_immunoreactive, file = "variables_immunoreactive.RData")
+save(variables_mesenchymal, file = "variables_mesenchymal.RData")
+save(variables_proliferative, file = "variables_proliferative.RData")
+```
+
+```{r}
+library(dplyr)
+library(ggplot2)
+
+# Function to visualize the distribution of contributions
+plot_contributions <- function(contributions, subtype, component, omic) {
+  df <- as.data.frame(contributions)
+  df$variable <- rownames(df)
+  ggplot(df, aes(x = abs(df[,1]))) +
+    geom_histogram(binwidth = 0.05, fill = 'blue', color = 'black', alpha = 0.7) +
+    labs(title = paste("Distribution of Contributions for", subtype, "- Component", component, "Omic", omic),
+         x = "Absolute Contribution",
+         y = "Frequency") +
+    theme_minimal()
+}
+
+# Create lists to iterate through omics and components
+omics <- c("cnv", "methyl", "miRNA", "tf")
+subtypes <- c("differentiated", "immunoreactive", "mesenchymal", "proliferative")
+components <- 1:4
+
+# Generate plots for all combinations of omics and components
+for (omic in omics) {
+  for (subtype in subtypes) {
+    for (component in components) {
+      contrib_data <- get(paste0("p", component))[[subtype]]
+      print(plot_contributions(contrib_data, subtype, component, omic))
+    }
+  }
+}
+
+
+# Function to select variables that exceed the threshold
+select_top_variables <- function(component_data, threshold) {
+  df <- as.data.frame(component_data)
+  colnames(df) <- "contribution"
+  top_variables <- df %>% filter(abs(contribution) >= threshold)
+  print(paste("Number of variables selected:", nrow(top_variables)))
+  return(rownames(top_variables))
+}
+
+# Apply the selection function to each component
+for (subtype in subtypes) {
+  for (component in components) {
+    contrib_data <- get(paste0("p", component))[[subtype]]
+    
+    assign(paste0(subtype, "_comp", component), select_top_variables(contrib_data, threshold))
+  }
+}
+
+# Save the selected variables for each subtype
+for (subtype in subtypes) {
+  vars <- unique(unlist(lapply(components, function(comp) get(paste0(subtype, "_comp", comp)))))
+  save(vars, file = paste0("variables_", subtype, ".RData"))
+}
+```
+
+```{r}
+plotArrow(result.diablo.filtered, ind.names = FALSE, legend = TRUE, c(1,2),
+          title = 'DIABLO')
+plotArrow(result.diablo.filtered, ind.names = FALSE, legend = TRUE, c(3,4),
+          title = 'DIABLO')
+```
+
+```{r}
+auc.splsda = auroc(result.diablo.filtered, roc.block = "miRNA", 
+                   roc.comp = 2, print = FALSE)
+auc.splsda = auroc(result.diablo.filtered, roc.block = "methyl", 
+                   roc.comp = 2, print = FALSE)
+auc.splsda = auroc(result.diablo.filtered, roc.block = "cnv", 
+                   roc.comp = 2, print = FALSE)
+auc.splsda = auroc(result.diablo.filtered, roc.block = "tf", 
+                   roc.comp = 2, print = FALSE)
+```
+
+```{r plsDApredictions}
+x_test_cnv <- cnv[-indices, ]
+x_test_methyl <- methyl[-indices, ]
+x_test_miRNA <- rna[-indices, ]
+x_test_tf <- tf[-indices, ]
+y_test <- Y[-indices]
+
+x_test_list <- list(cnv = x_test_cnv, methyl = x_test_methyl, miRNA = x_test_miRNA, tf = x_test_tf)
+
+predictions <- predict(result.diablo.filtered, newdata = x_test_list, dist=c("max.dist"))
+predictions$predict
+majority_vote = predictions$MajorityVote
+max_dist_major_vote = majority_vote$max.dist
+pred = predictions$class$max.dist
+
+
+pred_cnv_1 <- as.data.frame(pred$cnv)
+pred_methyl_1 <- as.data.frame(pred$methyl)
+pred_miRNA_1 <- as.data.frame(pred$miRNA)
+pred_tf_1 <- as.data.frame(pred$tf)
+
+pred <- cbind(pred_cnv_1, pred_methyl_1, pred_miRNA_1, pred_tf_1)
+majority_vote <- function(row) {
+  counts <- table(row)
+  majority_class <- names(counts)[which.max(counts)]
+  
+  return(majority_class)
+}
+
+predicted_classes <- apply(pred, 1, majority_vote)
+
+predicted_classes <- data.frame(predicted_class = predicted_classes)
+
+y <- as.factor(y_test)
+length(predicted_classes)
+predicted_classes <- unlist(predicted_classes)
+predicted <- as.factor(predicted_classes)
+
+confusion_matrix <- table(predicted, y)
+print(confusion_matrix)
+
+accuracy <- sum(diag(confusion_matrix)) / sum(confusion_matrix)
+print(paste("Accuracy:", accuracy))
+
+# Calculate and display the sensitivity
+sensitivity <- diag(confusion_matrix) / rowSums(confusion_matrix)
+print(paste("Sensitivity:", sensitivity))
+
+# Calculate and display the specificity for each cancer subtype
+specificity <- rep(NA, ncol(confusion_matrix))
+for (i in 1:ncol(confusion_matrix)) {
+  true_negatives <- sum(confusion_matrix[-i, -i])
+  false_positives <- sum(confusion_matrix[, i]) - confusion_matrix[i, i]
+  specificity[i] <- true_negatives / (true_negatives + false_positives)
+}
+print(paste("Specificity:", specificity))
+```
+
+```{r}
+# Create a dataframe with all predictions
+pred <- cbind(pred_cnv_1, pred_methyl_1, pred_miRNA_1, pred_tf_1)
+colnames(pred) <- c('dim1_cnv', 'dim2_cnv', 'dim3_cnv', 'dim4_cnv',
+                    'dim1_methyl', 'dim2_methyl', 'dim3_methyl', 'dim4_methyl',
+                    'dim1_miRNA', 'dim2_miRNA', 'dim3_miRNA', 'dim4_miRNA',
+                    'dim1_tf', 'dim2_tf', 'dim3_tf', 'dim4_tf')
+
+# Function to obtain the majority vote
+majority_vote <- function(row) {
+  counts <- table(row)
+  majority_class <- names(counts)[which.max(counts)]
+  return(majority_class)
+}
+
+# Apply the majority vote function to get the final prediction for each individual
+predicted_classes <- apply(pred, 1, majority_vote)
+
+# Convert predicted classes to a dataframe
+predicted_classes_df <- data.frame(sample = rownames(pred_cnv_1), predicted_class = predicted_classes)
+
+# Convert y_test to factor for comparison
+y_test <- as.factor(y_test)
+
+# Confusion Matrix
+confusion_matrix <- table(predicted_classes_df$predicted_class, y_test)
+print(confusion_matrix)
+
+# Accuracy
+accuracy <- sum(diag(confusion_matrix)) / sum(confusion_matrix)
+print(paste("Accuracy:", accuracy))
+
+# Sensitivity
+sensitivity <- diag(confusion_matrix) / rowSums(confusion_matrix)
+print(paste("Sensitivity:", sensitivity))
+
+# Specificity
+specificity <- rep(NA, ncol(confusion_matrix))
+for (i in 1:ncol(confusion_matrix)) {
+  true_negatives <- sum(confusion_matrix[-i, -i])
+  false_positives <- sum(confusion_matrix[, i]) - confusion_matrix[i, i]
+  specificity[i] <- true_negatives / (true_negatives + false_positives)
+}
+print(paste("Specificity:", specificity))
+```

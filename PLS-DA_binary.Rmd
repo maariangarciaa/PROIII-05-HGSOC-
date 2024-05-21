@@ -1,0 +1,149 @@
+---
+title: "PLS-DA_diff_prol"
+author: "Nuria Pastor"
+date: "2024-05-20"
+output: html_document
+---
+
+```{r}
+library(mixOmics)
+load('TCGAforMORE.RData')
+
+
+cnv = t(data.frame(omicas$CNV))
+methyl = t(data.frame(omicas$Methyl))
+rna = t(data.frame(omicas$miRNA))
+tf = t(data.frame(omicas$TF))
+omicas = t(rbind(omicas$CNV, omicas$miRNA, omicas$Methyl, omicas$TF))
+
+# include only "proliferative" and "differentiated"
+subtypes_to_keep <- c("proliferative", "differentiated")
+filtered_indices <- which(subtypes$subtype %in% subtypes_to_keep)
+
+cnv_filtered <- cnv[filtered_indices, ]
+methyl_filtered <- methyl[filtered_indices, ]
+rna_filtered <- rna[filtered_indices, ]
+tf_filtered <- tf[filtered_indices, ]
+Y_filtered <- subtypes$subtype[filtered_indices]
+
+rm(cnv, methyl, rna, tf, omicas)
+```
+
+
+```{r}
+set.seed(123)
+train_indices <- sample(1:nrow(cnv_filtered), size = 0.7 * nrow(cnv_filtered))
+
+x_train_cnv <- cnv_filtered[train_indices, ]
+x_train_methyl <- methyl_filtered[train_indices, ]
+x_train_miRNA <- rna_filtered[train_indices, ]
+x_train_tf <- tf_filtered[train_indices, ]
+y_train <- Y_filtered[train_indices]
+
+x_test_cnv <- cnv_filtered[-train_indices, ]
+x_test_methyl <- methyl_filtered[-train_indices, ]
+x_test_miRNA <- rna_filtered[-train_indices, ]
+x_test_tf <- tf_filtered[-train_indices, ]
+y_test <- Y_filtered[-train_indices]
+
+x_train_list <- list(cnv = x_train_cnv, methyl = x_train_methyl, miRNA = x_train_miRNA, tf = x_train_tf)
+x_test_list <- list(cnv = x_test_cnv, methyl = x_test_methyl, miRNA = x_test_miRNA, tf = x_test_tf)
+```
+
+
+```{r}
+result.diablo.filtered <- block.plsda(x_train_list, y_train, ncomp = 4)
+
+
+predictions <- predict(result.diablo.filtered, newdata = x_test_list, dist=c("max.dist"))
+pred = predictions$class$max.dist
+
+
+pred_cnv_1 <- as.data.frame(pred$cnv)
+pred_methyl_1 <- as.data.frame(pred$methyl)
+pred_miRNA_1 <- as.data.frame(pred$miRNA)
+pred_tf_1 <- as.data.frame(pred$tf)
+
+pred <- cbind(pred_cnv_1, pred_methyl_1, pred_miRNA_1, pred_tf_1)
+majority_vote <- function(row) {
+  counts <- table(row)
+  majority_class <- names(counts)[which.max(counts)]
+  
+  return(majority_class)
+}
+
+predicted_classes <- apply(pred, 1, majority_vote)
+
+y <- as.factor(y_test)
+predicted_classes <- unlist(predicted_classes)
+predicted <- as.factor(predicted_classes)
+
+confusion_matrix <- table(predicted, y)
+print(confusion_matrix)
+
+accuracy <- sum(diag(confusion_matrix)) / sum(confusion_matrix)
+print(paste("Accuracy:", accuracy))
+
+# Calcular y mostrar la sensibilidad
+sensitivity <- diag(confusion_matrix) / rowSums(confusion_matrix)
+print(paste("Sensitivity:", sensitivity))
+
+# Calcular y mostrar la especificidad para cada subtipo de cáncer
+specificity <- rep(NA, ncol(confusion_matrix))
+for (i in 1:ncol(confusion_matrix)) {
+  true_negatives <- sum(confusion_matrix[-i, -i])
+  false_positives <- sum(confusion_matrix[, i]) - confusion_matrix[i, i]
+  specificity[i] <- true_negatives / (true_negatives + false_positives)
+}
+print(paste("Specificity:", specificity))
+```
+
+
+```{r}
+library(dplyr)
+
+# Definir el umbral
+threshold <- 0.5  # Ajusta este valor según sea necesario
+
+# Función para seleccionar las variables que superan el umbral
+select_top_variables <- function(component, threshold) {
+  top_variables <- component %>% filter(abs(component[[1]]) >= threshold)
+  print(paste("Número de variables seleccionadas:", nrow(top_variables)))  # Imprimir el número de variables seleccionadas
+  return(rownames(top_variables))
+}
+
+# Aplicar la función de selección a cada componente
+differentiated_comp1 <- as.data.frame(p1['differentiated']) %>% arrange(desc(abs(differentiated)))
+differentiated_comp2 <- as.data.frame(p2['differentiated']) %>% arrange(desc(abs(differentiated)))
+differentiated_comp3 <- as.data.frame(p3['differentiated']) %>% arrange(desc(abs(differentiated)))
+differentiated_comp4 <- as.data.frame(p4['differentiated']) %>% arrange(desc(abs(differentiated)))
+
+proliferative_comp1 <- as.data.frame(p1['proliferative']) %>% arrange(desc(abs(proliferative)))
+proliferative_comp2 <- as.data.frame(p2['proliferative']) %>% arrange(desc(abs(proliferative)))
+proliferative_comp3 <- as.data.frame(p3['proliferative']) %>% arrange(desc(abs(proliferative)))
+proliferative_comp4 <- as.data.frame(p4['proliferative']) %>% arrange(desc(abs(proliferative)))
+
+# Seleccionar las variables principales
+diff_comp1 <- select_top_variables(differentiated_comp1, threshold)
+diff_comp2 <- select_top_variables(differentiated_comp2, threshold)
+diff_comp3 <- select_top_variables(differentiated_comp3, threshold)
+diff_comp4 <- select_top_variables(differentiated_comp4, threshold)
+variables_differentiatedbi <- union(diff_comp1, diff_comp2)
+variables_differentiatedbi <- union(variables_differentiatedbi, diff_comp3)
+variables_differentiatedbyi<- union(variables_differentiatedbi, diff_comp4)
+
+
+pro_comp1 <- select_top_variables(proliferative_comp1, threshold)
+pro_comp2 <- select_top_variables(proliferative_comp2, threshold)
+pro_comp3 <- select_top_variables(proliferative_comp3, threshold)
+pro_comp4 <- select_top_variables(proliferative_comp4, threshold)
+variables_proliferativebi <- union(pro_comp1, pro_comp2)
+variables_proliferativebi <- union(variables_proliferativebi, pro_comp3)
+variables_proliferativebi <- union(variables_proliferativebi, pro_comp4)
+
+# Guardar las variables seleccionadas
+save(variables_differentiatedbi, file = "variables_differentiatedbi.RData")
+save(variables_proliferativebi, file = "variables_proliferativebi.RData")
+```
+```
+
