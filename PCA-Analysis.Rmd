@@ -1,0 +1,142 @@
+---
+title: "Untitled"
+author: "Moraga"
+date: "2024-02-23"
+output: word_document
+---
+Charge libraries
+```{r setup, include=FALSE}
+library(stats)
+library(FactoMineR)
+library(factoextra)
+
+```
+
+RData
+```{r setup, include=FALSE}
+load('TCGAforMORE.RData')
+```
+
+## R Markdown
+
+
+Generate a dataframe for each matrix and transpose them
+```{r}
+omicas_cnv <- t(data.frame(omicas$CNV))
+omicas_methyl <- t(data.frame(omicas$Methyl))
+omicas_mirna <- t(data.frame(omicas$miRNA))
+omicas_tf <- t(data.frame(omicas$TF))
+nombres_filas_TF <-colnames(omicas_tf)
+nuevos_nombres_filas <- paste0(nombres_filas_TF, 'TF')
+colnames(omicas_tf) <- nuevos_nombres_filas
+omicas_all = rbind(t(cnv), t(methyl), t(mirna), t(tf))
+```
+
+## PCA Methyl
+
+Principal components creation for methylation
+```{r pressure, echo=FALSE}
+pca <- prcomp(methyl, center = TRUE)
+
+# Get eigenvalues
+eig.val <- get_eigenvalue(pca)
+
+# Calculate average explained variance
+average_explained_variance = 100 * (1/nrow(eig.val))
+
+# Visualize PCA results with a horizontal line at the average explained variance
+fviz_eig(pca, addlabels = TRUE) +
+  geom_hline(yintercept=average_explained_variance, linetype=2, color="red")
+
+```
+
+Create loading plots
+```{r}
+cancer_subtypes <- as.factor(unlist(subtypes))
+
+indiv12 <- fviz_pca_ind(pca,
+             col.ind = cancer_subtypes, # Color by groups
+             geom = c("point"),
+             palette = "jco", # Color palette
+             addEllipses = TRUE, # Add confidence ellipses
+             legend.title = "Subtypes")
+
+indiv34 <- fviz_pca_ind(pca,
+             col.ind = cancer_subtypes, # Color by groups
+             geom = c("point"),
+             axes = c(3, 4), # Specify dimensions to visualize
+             palette = "jco", # Color palette
+             addEllipses = TRUE, # Add confidence ellipses
+             legend.title = "Subtypes")
+
+indiv12
+indiv34
+```
+
+```{r}
+fviz_pca_biplot(pca, 
+                col.ind = cancer_subtypes, # Color points by cancer subtypes
+                col.var = "#2E9FDF", # Color for variables/loadings, can be changed
+                palette = "jco", # Color palette for points
+                label = 'None', # Add confidence ellipses for groups
+                ellipse.level = 0.95, # Confidence level for ellipses
+                legend.title = "Subtypes",
+                addEllipses = TRUE, # Add confidence ellipses
+                axes = c(3, 4)) # Axes to represent
+```
+
+## PCA miRNA
+
+Principal component analysis for miRNA
+```{r pressure, echo=FALSE}
+pca_mirna <- prcomp(mirna, center = TRUE)
+eig.val_mirna <- get_eigenvalue(pca_mirna)
+VPmedio = 100 * (1/nrow(eig.val_mirna))
+fviz_eig(pca_mirna, addlabels = TRUE) + geom_hline(yintercept=VPmedio, linetype=2, color="red")
+```
+
+```{R}
+indiv12_mirna <- fviz_pca_ind(pca_mirna,col.ind = subtipos_cancer,geom = c("point"),     palette = "jco",addEllipses = TRUE,legend.title = "Subtipos")
+
+indiv34_mirna <- fviz_pca_ind(pca_mirna,col.ind = subtipos_cancer,geom = c("point"),       axes = c(3, 4),palette = "jco",addEllipses = TRUE,legend.title = "Subtipos")
+
+indiv12_mirna
+indiv34_mirna
+```
+## PCA tf
+
+Principal component creation for TF
+```{r}
+pca_tf <- prcomp(tf, center = TRUE)
+eig.val_tf <- get_eigenvalue(pca_tf)
+VPmedio = 100 * (1/nrow(eig.val_tf))
+fviz_eig(pca_tf, addlabels = TRUE) + geom_hline(yintercept=VPmedio, linetype=2, color="red")
+```
+
+```{R}
+indiv12_tf <- fviz_pca_ind(pca_tf,col.ind = subtipos_cancer,geom = c("point"), palette = "jco",addEllipses = TRUE,legend.title = "Subtipos")
+
+indiv34_tf <- fviz_pca_ind(pca_tf,col.ind = subtipos_cancer,geom = c("point"), axes = c(3, 4),palette = "jco",addEllipses = TRUE,legend.title = "Subtipos")
+
+indiv12_tf
+indiv34_tf
+```
+# PCA CNV
+
+Principal component creation for CNV
+```{r}
+pca_cnv <- prcomp(cnv, center = TRUE)
+eig.val_cnv <- get_eigenvalue(pca_cnv)
+VPmedio = 100 * (1/nrow(eig.val_cnv))
+fviz_eig(pca_cnv, addlabels = TRUE) +
+  geom_hline(yintercept=VPmedio, linetype=2, color="red")
+```
+
+```{R}
+indiv12_cnv <- fviz_pca_ind(pca_cnv,col.ind = subtipos_cancer,geom = c("point"),       palette = "jco",addEllipses = TRUE,legend.title = "Subtipos")
+
+indiv34_cnv <- fviz_pca_ind(pca_cnv, col.ind = subtipos_cancer,geom = c("point"),          axes = c(3, 4),palette = "jco",addEllipses = TRUE,legend.title = "Subtipos")
+
+indiv12_cnv
+indiv34_cnv
+```
