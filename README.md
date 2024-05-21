@@ -2,6 +2,15 @@
 
 Welcome to the PROIII-05-HGSOC repository, a dedicated space for our research into High-Grade Serous Ovarian Cancer (HGSOC). HGSOC stands as a challenge in oncology, characterized by its aggressive nature and often grim prognosis. Our research is focused on underlying molecular intricacies of this disease and its subtypes, aiming to decipher the nuanced mechanisms that propel ovarian cancer progression.
 
+## Installation
+
+Ensure you have the necessary R packages installed to follow the analyses in this repository:
+
+```R
+# Install necessary R packages
+install.packages(c("FactoMineR", "factoextra", "glmnet", "survival", "caret", "mixOmics", "blockForest", "dplyr"))
+```
+
 ## Understanding HGSOC
 
 High-Grade Serous Ovarian Cancer (HGSOC) represents a complex oncological entity with multiple subtypes each contributing differently to patient outcomes. Through comprehensive analysis of multi-omic data, we explore the distinct etiological factors and the omic variables that define each subtype.
